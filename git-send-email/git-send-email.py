@@ -1,27 +1,5 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
-#
-# git send email script
-#
-# Copyright (C) 2017 Sathya Kuppuswamy
-#
-# This program is free software; you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 2 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# @Author  : Sathya Kupppuswamy(sathyaosid@gmail.com)
-# @History :
-#          :  @v0.1 - Inital script
-# @TODO    : Fix CC list issue
-#          : Remove email hardcode
-#
-#
+
 import os
 import sys
 import logging
@@ -36,9 +14,10 @@ FORMAT = "[%(filename)s:%(lineno)s - %(funcName)20s() ] %(message)s"
 logging.basicConfig(format=FORMAT)
 logger.setLevel(logging.DEBUG)
 
-GSM_SMTP = os.getenv("GSM_SMTP_SERVER", "smtp.intel.com")
-GSM_CC_LIST = os.getenv("GSM_CC_LIST", "sathyaosid@gmail.com")
-GSM_FROM = os.getenv("GSM_FROM", "sathyanarayanan.kuppuswamy@linux.intel.com")
+GSM_SMTP = os.getenv("GSM_SMTP_SERVER", None)
+GSM_CC_LIST = os.getenv("GSM_CC_LIST", [])
+GSM_TO_LIST = os.getenv("GSM_TO_LIST", [])
+GSM_FROM = os.getenv("GSM_FROM", None)
 GIT_CMD = "/usr/bin/git"
 
 def glob_recursive(root, pattern):
@@ -51,7 +30,7 @@ def glob_recursive(root, pattern):
 
 def get_email_list(kernel, patch_dir):
     output = ""
-    cc_list = [GSM_CC_LIST]
+    cc_list = []
     to_list = []
     patch_list = []
 
@@ -94,19 +73,26 @@ def get_email_list(kernel, patch_dir):
 
     return (to_list, cc_list)
 
-def send_email(to_list, cc_list, patch_dir):
+def send_email(from_addr, to_list, cc_list, reply_to, smtp_server, patch_dir):
     send_cmd = [GIT_CMD, "send-email", "--no-thread"]
 
-    add_option = lambda x, y: send_cmd.append( x + "=" + y)
+    logger.debug("from: %s", from_addr)
+    logger.debug("to: %s", to_list)
+    logger.debug("cc: %s", cc_list)
 
-    add_option("--smtp-server", GSM_SMTP)
-    add_option("--from", GSM_FROM)
+    add_option = lambda x, y: send_cmd.append( x + "=" + y)
+    
+    add_option("--smtp-server", smtp_server)
+    add_option("--from", from_addr)
 
     for to in to_list:
         add_option("--to", to)
 
     for cc in cc_list:
         add_option("--cc", cc)
+
+    if reply_to is not None:
+        add_option("--in-reply-to", reply_to)
 
     send_cmd.append(patch_dir)
 
@@ -119,7 +105,7 @@ def send_email(to_list, cc_list, patch_dir):
         return subprocess.check_call(send_cmd)
 
     return 0
-
+ 
 def is_valid_patch(parser, arg):
     if os.path.isdir(arg):
         file_list = glob_recursive(arg, '*.patch')
@@ -144,7 +130,19 @@ if __name__ == '__main__':
                         type=lambda x: is_valid_patch(parser, x),
                         help='patch directory or patch file')
 
+    parser.add_argument('--smtp-server', action='store', type=str, dest='smtp_server', default=GSM_SMTP, help='smtp server address')
+    parser.add_argument('--from', action='store', type=str, dest='from_addr', default=GSM_FROM, help='from email address')
+    parser.add_argument('--to-list', nargs='+', type=str, dest='to_list', default=[], help='to list for this patch list')
+    parser.add_argument('--cc-list', nargs='+', type=str, dest='cc_list', default=[], help='cc list for this patch list')
+    parser.add_argument('--reply-to', action='store', type=str, dest='reply_to', help='reply to mail id')
+
     args = parser.parse_args()
+
+    if args.from_addr is None:
+        raise Exception("Missing from email address")
+
+    if args.smtp_server is None:
+        raise Exception("Missing SMTP server address")
 
     print args
 
@@ -154,5 +152,8 @@ if __name__ == '__main__':
 
     to_list, cc_list = get_email_list(kernel_dir, args.patch_dir)
 
-    send_email(to_list, cc_list, args.patch_dir)
+    cc_list = cc_list + args.cc_list + GSM_CC_LIST
+    to_list = to_list + args.to_list + GSM_TO_LIST
 
+    send_email(args.from_addr, to_list, cc_list, args.reply_to, args.smtp_server, args.patch_dir)
+    
